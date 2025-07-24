@@ -17,8 +17,9 @@ from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, EmailStr
 import jwt
 from passlib.context import CryptContext
-import torch
-import torchaudio
+# Removed torch imports for Render compatibility
+# import torch
+# import torchaudio
 import numpy as np
 
 # Configure logging
@@ -108,15 +109,16 @@ class AudioInfo(BaseModel):
     sample_rate: int
 
 # Mock TTS class for CPU (since ChatterboxTTS requires GPU)
-class MockTTS:
-    def __init__(self, device="cpu"):
-        self.device = device
-        logger.info(f"Initialized Mock TTS on device: {device}")
+# Simple TTS class for demo (no PyTorch dependency)
+class SimpleTTS:
+    def __init__(self):
+        logger.info("Initialized Simple TTS (demo mode)")
     
     def generate_speech(self, text: str, voice_id: str = "default", **kwargs) -> tuple:
-        """Generate mock speech for demo purposes"""
-        # Generate a simple sine wave as placeholder audio
-        duration = len(text) * 0.1  # 0.1 seconds per character
+        """Generate simple audio demo"""
+        import math
+        
+        duration = max(1.0, len(text) * 0.1)  # At least 1 second
         sample_rate = 22050
         t = np.linspace(0, duration, int(sample_rate * duration))
         
@@ -128,10 +130,15 @@ class MockTTS:
         }
         frequency = voice_frequencies.get(voice_id, 440)
         
-        # Generate sine wave
+        # Generate simple sine wave
         audio = np.sin(2 * np.pi * frequency * t) * 0.3
         
+        # Add some variation based on text length
+        if len(text) > 10:
+            audio += np.sin(2 * np.pi * (frequency * 1.5) * t) * 0.1
+        
         # Convert to int16
+        audio = np.clip(audio, -1, 1)
         audio = (audio * 32767).astype(np.int16)
         
         return audio, sample_rate
