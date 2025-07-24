@@ -1,0 +1,18 @@
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+python-jose[cryptography]==3.3.0
+passlib[bcrypt]==1.7.4
+pydantic[email]==2.5.0
+torch==2.1.0+cpu
+torchaudio==2.1.0+cpu
+numpy==1.24.3
+requests==2.31.0
+aiofiles==23.2.0
+python-dotenv==1.0.0
+
+# Optional: ChatterboxTTS dependencies (if available)
+# transformers==4.35.0
+# scipy==1.11.4
+# librosa==0.10.1
+# soundfile==0.12.1
