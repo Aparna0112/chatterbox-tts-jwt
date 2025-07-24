@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from pydantic import BaseModel, EmailStr
 import jwt
+from jose import jwt as jose_jwt
 from passlib.context import CryptContext
 # Removed torch imports for Render compatibility
 # import torch
