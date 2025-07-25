@@ -2,15 +2,27 @@ services:
   - type: web
     name: chatterbox-tts-jwt
     env: python
-    buildCommand: pip install -r requirements.txt
+    region: oregon
+    plan: starter  # Use starter for better performance than free tier
+    buildCommand: |
+      pip install --upgrade pip
+      pip install torch torchaudio --index-url https://download.pytorch.org/whl/cpu
+      pip install -r requirements.txt
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
-    plan: free
     envVars:
-      - key: PYTHON_VERSION
-        value: 3.10.7
       - key: SECRET_KEY
         generateValue: true
+      - key: PYTHON_VERSION
+        value: "3.11"
       - key: ACCESS_TOKEN_EXPIRE_MINUTES
-        value: 30
+        value: "30"
       - key: REFRESH_TOKEN_EXPIRE_DAYS
-        value: 7
+        value: "7"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: HF_HUB_CACHE
+        value: "/opt/render/project/.cache/huggingface"
+    disk:
+      name: tts-data
+      mountPath: /opt/render/project/data
+      sizeGB: 5
