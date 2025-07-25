@@ -20,13 +20,15 @@ import soundfile as sf
 import torchaudio
 import torch
 
-# Import Chatterbox TTS
+# Import Chatterbox TTS (real implementation only)
 try:
     from chatterbox.tts import ChatterboxTTS
     CHATTERBOX_AVAILABLE = True
-except ImportError:
+    print("✅ Real Chatterbox TTS loaded successfully")
+except ImportError as e:
     CHATTERBOX_AVAILABLE = False
-    print("WARNING: Chatterbox TTS not available. Install with: pip install chatterbox-tts")
+    print(f"❌ Chatterbox TTS not available: {e}")
+    print("Install from GitHub: pip install git+https://github.com/resemble-ai/chatterbox.git")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -79,19 +81,25 @@ class ChatterboxTTSWrapper:
     def initialize_model(self):
         """Initialize Chatterbox TTS model"""
         try:
-            if CHATTERBOX_AVAILABLE:
-                # Try to use GPU if available, fallback to CPU
-                if torch.cuda.is_available():
-                    self.device = "cuda"
-                elif torch.backends.mps.is_available():
-                    self.device = "mps"
+            if not CHATTERBOX_AVAILABLE:
+                logger.error("Chatterbox TTS not available - cannot initialize")
+                return
                 
-                logger.info(f"Initializing Chatterbox TTS on device: {self.device}")
-                self.model = ChatterboxTTS.from_pretrained(device=self.device)
-                logger.info("Chatterbox TTS model loaded successfully")
+            # Try to use GPU if available, fallback to CPU
+            if torch.cuda.is_available():
+                self.device = "cuda"
+                logger.info("Using CUDA GPU for TTS")
+            elif torch.backends.mps.is_available():
+                self.device = "mps"
+                logger.info("Using MPS (Apple Silicon) for TTS")
             else:
-                logger.error("Chatterbox TTS not available")
-                self.model = None
+                self.device = "cpu"
+                logger.info("Using CPU for TTS (slower but works on Render)")
+            
+            logger.info(f"Initializing Chatterbox TTS on device: {self.device}")
+            self.model = ChatterboxTTS.from_pretrained(device=self.device)
+            logger.info("✅ Real Chatterbox TTS model loaded successfully")
+            
         except Exception as e:
             logger.error(f"Failed to initialize Chatterbox TTS: {e}")
             self.model = None
@@ -106,18 +114,25 @@ class ChatterboxTTSWrapper:
         audio_prompt_path: Optional[str] = None
     ) -> tuple[np.ndarray, int]:
         """Generate speech using Chatterbox TTS"""
-        try:
-            if not self.model:
-                raise Exception("Chatterbox TTS model not available")
+        if not self.model:
+            raise Exception("Chatterbox TTS model not initialized")
             
-            # Clean up text
+        try:
+            # Clean up text first
             text = text.strip()
             if not text:
                 raise ValueError("Text cannot be empty")
             
-            # Generate speech
+            # Limit text length to avoid issues
+            if len(text) > 1000:
+                text = text[:1000]
+                logger.warning("Text truncated to 1000 characters")
+            
+            logger.info(f"Generating speech for text: {text[:50]}...")
+            
+            # Generate speech with Chatterbox TTS
             if audio_prompt_path and Path(audio_prompt_path).exists():
-                # Use custom voice
+                logger.info(f"Using custom voice from: {audio_prompt_path}")
                 wav = self.model.generate(
                     text, 
                     audio_prompt_path=audio_prompt_path,
@@ -126,7 +141,7 @@ class ChatterboxTTSWrapper:
                     temperature=temperature
                 )
             else:
-                # Use default voice
+                logger.info("Using default Chatterbox voice")
                 wav = self.model.generate(
                     text,
                     exaggeration=exaggeration,
@@ -134,21 +149,23 @@ class ChatterboxTTSWrapper:
                     temperature=temperature
                 )
             
-            # Convert to numpy array if it's a tensor
+            # Convert tensor to numpy if needed
             if torch.is_tensor(wav):
                 wav = wav.cpu().numpy()
             
-            # Ensure proper shape
+            # Ensure proper shape (1D audio)
             if wav.ndim > 1:
                 wav = wav.squeeze()
             
-            # Get sample rate
-            sample_rate = self.model.sr if hasattr(self.model, 'sr') else 24000
+            # Get sample rate from model
+            sample_rate = getattr(self.model, 'sr', 24000)
+            
+            logger.info(f"✅ Speech generated successfully - {len(wav)} samples at {sample_rate}Hz")
             
             return wav, sample_rate
             
         except Exception as e:
-            logger.error(f"Speech generation failed: {e}")
+            logger.error(f"Chatterbox TTS generation failed: {e}")
             raise Exception(f"Speech generation failed: {str(e)}")
 
 # Initialize TTS
