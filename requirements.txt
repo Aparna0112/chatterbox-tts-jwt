@@ -1,9 +1,35 @@
-fastapi==0.104.1
-uvicorn[standard]==0.24.0
-python-multipart==0.0.6
-PyJWT==2.8.0
-passlib[bcrypt]==1.7.4
-pydantic[email]==2.5.0
-numpy==1.24.3
-requests==2.31.0
-python-dotenv==1.0.0
+# Web framework
+fastapi>=0.104.1
+uvicorn[standard]>=0.24.0
+
+# Authentication
+python-jose[cryptography]>=3.3.0
+passlib[bcrypt]>=1.7.4
+python-multipart>=0.0.6
+
+# Audio processing
+soundfile>=0.12.1
+librosa>=0.10.1
+numpy>=1.24.3
+
+# PyTorch (CPU version for Render)
+torch>=2.0.0+cpu
+torchaudio>=2.0.0+cpu
+--find-links https://download.pytorch.org/whl/torch_stable.html
+
+# Chatterbox TTS
+chatterbox-tts>=1.0.0
+
+# Additional dependencies that might be needed
+transformers>=4.30.0
+huggingface_hub>=0.16.4
+safetensors>=0.3.1
+accelerate>=0.20.3
+
+# Utilities
+python-dotenv>=1.0.0
+requests>=2.31.0
+aiofiles>=23.2.1
+
+# For better error handling
+sentry-sdk[fastapi]>=1.32.0
