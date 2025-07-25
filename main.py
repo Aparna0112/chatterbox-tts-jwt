@@ -1,14 +1,15 @@
-# main.py - Complete Chatterbox TTS API with JWT Authentication and Audio Generation
+# main.py - Complete Chatterbox TTS API with JWT Authentication and Human-like Speech
 import os
 import uuid
 import logging
 import wave
 import base64
 import io
+import math
+import random
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import json
-import math
 
 from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form, status, Query
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -26,8 +27,8 @@ logger = logging.getLogger(__name__)
 # Initialize FastAPI app
 app = FastAPI(
     title="Chatterbox TTS API with JWT Authentication",
-    description="Production-ready Text-to-Speech API with voice cloning, JWT authentication, and audio playback",
-    version="2.0.0"
+    description="Production-ready Text-to-Speech API with human-like voice synthesis, JWT authentication, and audio playback",
+    version="2.1.0"
 )
 
 # CORS middleware
@@ -183,7 +184,7 @@ class SynthesizeRequest(BaseModel):
     speed: float = 1.0
     pitch: float = 1.0
     volume: float = 1.0
-    output_format: str = "wav"  # wav, mp3
+    output_format: str = "wav"
 
 class AudioInfo(BaseModel):
     audio_id: str
@@ -196,99 +197,417 @@ class AudioInfo(BaseModel):
     format: str
     file_size: int
 
-# Audio generation functions
+# Human-like TTS Engine
 class AdvancedTTS:
     def __init__(self):
         self.sample_rate = 22050
-        logger.info("Initialized Advanced TTS Engine")
+        logger.info("Initialized Advanced TTS Engine with Human-like Speech")
+        
+        # Phoneme-to-frequency mapping for more realistic speech
+        self.phoneme_frequencies = {
+            # Vowels (formant frequencies)
+            'a': {'f1': 730, 'f2': 1090, 'f3': 2440},  # as in "cat"
+            'e': {'f1': 530, 'f2': 1840, 'f3': 2480},  # as in "bed"
+            'i': {'f1': 270, 'f2': 2290, 'f3': 3010},  # as in "bit"
+            'o': {'f1': 570, 'f2': 840, 'f3': 2410},   # as in "dog"
+            'u': {'f1': 300, 'f2': 870, 'f3': 2240},   # as in "book"
+            'y': {'f1': 310, 'f2': 2160, 'f3': 2680},  # as in "yes"
+            
+            # Consonants (approximated)
+            's': {'f1': 200, 'f2': 4000, 'f3': 8000},  # fricative
+            't': {'f1': 100, 'f2': 1500, 'f3': 4000},  # stop
+            'n': {'f1': 280, 'f2': 1700, 'f3': 2600},  # nasal
+            'm': {'f1': 250, 'f2': 1200, 'f3': 2400},  # nasal
+            'l': {'f1': 300, 'f2': 1300, 'f3': 3000},  # liquid
+            'r': {'f1': 350, 'f2': 1200, 'f3': 1600},  # liquid
+            'f': {'f1': 180, 'f2': 1000, 'f3': 7500},  # fricative
+            'v': {'f1': 200, 'f2': 1000, 'f3': 2500},  # fricative
+            'th': {'f1': 180, 'f2': 1400, 'f3': 2800}, # fricative
+            'p': {'f1': 80, 'f2': 1000, 'f3': 2500},   # stop
+            'b': {'f1': 100, 'f2': 1000, 'f3': 2500},  # stop
+            'k': {'f1': 100, 'f2': 2000, 'f3': 3500},  # stop
+            'g': {'f1': 120, 'f2': 2000, 'f3': 3500},  # stop
+            'd': {'f1': 120, 'f2': 1700, 'f3': 3500},  # stop
+            'w': {'f1': 300, 'f2': 900, 'f3': 2200},   # glide
+            'h': {'f1': 300, 'f2': 1500, 'f3': 2500},  # fricative
+            'j': {'f1': 280, 'f2': 2200, 'f3': 3000},  # fricative/affricate
+            'z': {'f1': 250, 'f2': 2000, 'f3': 6000},  # fricative
+            'c': {'f1': 200, 'f2': 4000, 'f3': 8000},  # like 's'
+            'q': {'f1': 100, 'f2': 2000, 'f3': 3500},  # like 'k'
+            'x': {'f1': 200, 'f2': 3000, 'f3': 7000},  # fricative
+            'default': {'f1': 400, 'f2': 1500, 'f3': 2500}
+        }
+        
+        # Voice characteristics for different voice types
+        self.voice_profiles = {
+            "default": {
+                "base_f0": 150,  # Fundamental frequency (pitch)
+                "f0_range": 50,  # Pitch variation range
+                "formant_shift": 1.0,  # Formant frequency multiplier
+                "breathiness": 0.08,  # Amount of noise/breathiness
+                "vibrato_rate": 5.0,  # Vibrato frequency
+                "vibrato_depth": 0.02  # Vibrato intensity
+            },
+            "female_default": {
+                "base_f0": 220,
+                "f0_range": 80,
+                "formant_shift": 1.15,  # Higher formants for female voice
+                "breathiness": 0.12,
+                "vibrato_rate": 5.5,
+                "vibrato_depth": 0.025
+            },
+            "male_default": {
+                "base_f0": 120,
+                "f0_range": 40,
+                "formant_shift": 0.9,  # Lower formants for male voice
+                "breathiness": 0.06,
+                "vibrato_rate": 4.5,
+                "vibrato_depth": 0.018
+            },
+            "female_young": {
+                "base_f0": 250,
+                "f0_range": 100,
+                "formant_shift": 1.2,
+                "breathiness": 0.1,
+                "vibrato_rate": 6.0,
+                "vibrato_depth": 0.03
+            },
+            "male_deep": {
+                "base_f0": 90,
+                "f0_range": 30,
+                "formant_shift": 0.8,
+                "breathiness": 0.04,
+                "vibrato_rate": 4.0,
+                "vibrato_depth": 0.015
+            },
+            "female_british": {
+                "base_f0": 200,
+                "f0_range": 60,
+                "formant_shift": 1.1,
+                "breathiness": 0.09,
+                "vibrato_rate": 5.2,
+                "vibrato_depth": 0.022
+            }
+        }
+    
+    def _text_to_phonemes(self, text: str) -> list:
+        """Convert text to simplified phonemes for speech synthesis"""
+        text = text.lower()
+        phonemes = []
+        
+        i = 0
+        while i < len(text):
+            char = text[i]
+            
+            # Handle digraphs (two-character combinations)
+            if i < len(text) - 1:
+                digraph = text[i:i+2]
+                if digraph == 'th':
+                    phonemes.append('th')
+                    i += 2
+                    continue
+                elif digraph == 'ch':
+                    phonemes.append('j')  # ch sound similar to j
+                    i += 2
+                    continue
+                elif digraph == 'sh':
+                    phonemes.append('s')  # simplified
+                    i += 2
+                    continue
+            
+            if char in 'aeiou':
+                phonemes.append(char)
+            elif char in 'bcdfgjklmnpqrstvwxyz':
+                phonemes.append(char)
+            elif char == ' ':
+                phonemes.append('pause')
+            elif char in '.,!?;:':
+                phonemes.append('long_pause')
+            elif char in '-–—':
+                phonemes.append('pause')
+            else:
+                # Skip unknown characters or add as pause
+                if char.isalnum():
+                    phonemes.append('default')
+            
+            i += 1
+        
+        return phonemes
+    
+    def _generate_formant_wave(self, duration: float, f1: float, f2: float, f3: float, 
+                              f0: float, sample_rate: int) -> np.ndarray:
+        """Generate a formant-based wave that sounds more like human speech"""
+        t = np.linspace(0, duration, int(sample_rate * duration))
+        
+        if len(t) == 0:
+            return np.array([])
+        
+        # Generate fundamental frequency with natural variation
+        f0_variation = f0 * (1 + 0.08 * np.sin(2 * np.pi * 3.5 * t) + 
+                            0.03 * np.sin(2 * np.pi * 7.2 * t))  # Natural pitch variation
+        
+        # Generate harmonic series for more natural sound
+        wave = np.zeros_like(t)
+        
+        # Add fundamental and harmonics with formant shaping
+        for harmonic in range(1, 10):  # First 9 harmonics
+            freq = f0_variation * harmonic
+            
+            # Natural harmonic amplitude decay
+            base_amplitude = 1.0 / (harmonic ** 0.7)
+            
+            # Apply formant filtering (boost frequencies near formants)
+            formant_boost = 1.0
+            
+            # First formant boost
+            f1_distance = np.abs(freq - f1)
+            f1_boost = np.exp(-f1_distance / 150) * 1.5
+            
+            # Second formant boost
+            f2_distance = np.abs(freq - f2)
+            f2_boost = np.exp(-f2_distance / 200) * 1.2
+            
+            # Third formant boost
+            f3_distance = np.abs(freq - f3)
+            f3_boost = np.exp(-f3_distance / 250) * 0.8
+            
+            # Combine formant effects
+            formant_boost = 1.0 + f1_boost + f2_boost + f3_boost
+            
+            # Final amplitude
+            amplitude = base_amplitude * formant_boost * 0.3
+            
+            # Generate harmonic wave with slight phase variation for realism
+            phase = random.uniform(0, 2 * np.pi)
+            harmonic_wave = amplitude * np.sin(2 * np.pi * freq * t + phase)
+            
+            # Add to main wave
+            wave += harmonic_wave
+        
+        return wave
+    
+    def _add_voice_characteristics(self, wave: np.ndarray, voice_profile: dict, 
+                                  t: np.ndarray) -> np.ndarray:
+        """Add voice-specific characteristics like breathiness and vibrato"""
+        
+        if len(wave) == 0 or len(t) == 0:
+            return wave
+        
+        # Add vibrato (natural pitch variation)
+        vibrato = 1 + voice_profile["vibrato_depth"] * np.sin(
+            2 * np.pi * voice_profile["vibrato_rate"] * t
+        )
+        wave *= vibrato
+        
+        # Add breathiness (subtle noise that sounds like breath)
+        if voice_profile["breathiness"] > 0:
+            # Generate colored noise (more realistic than white noise)
+            noise = np.random.normal(0, 1, len(wave))
+            # Apply simple low-pass filter to noise for more natural breathiness
+            if len(noise) > 1:
+                for i in range(1, len(noise)):
+                    noise[i] = 0.7 * noise[i] + 0.3 * noise[i-1]
+            noise *= voice_profile["breathiness"]
+            wave += noise
+        
+        # Add natural amplitude variation (like natural breathing rhythm)
+        amplitude_variation = 1 + 0.08 * np.sin(2 * np.pi * 0.8 * t) + \
+                             0.04 * np.sin(2 * np.pi * 2.1 * t)
+        wave *= amplitude_variation
+        
+        # Add subtle tremolo (amplitude modulation)
+        tremolo = 1 + 0.02 * np.sin(2 * np.pi * 6.5 * t)
+        wave *= tremolo
+        
+        return wave
+    
+    def _apply_coarticulation(self, phoneme_waves: list) -> np.ndarray:
+        """Apply coarticulation effects (phonemes influencing each other)"""
+        if len(phoneme_waves) == 0:
+            return np.array([])
+        
+        if len(phoneme_waves) == 1:
+            return phoneme_waves[0]
+        
+        result = []
+        
+        for i, wave in enumerate(phoneme_waves):
+            if len(wave) == 0:
+                continue
+                
+            if i == 0:
+                # First phoneme - just add it
+                result.append(wave)
+            else:
+                # Blend with previous phoneme for smooth transitions
+                transition_length = min(len(wave) // 3, 800)  # Up to 800 samples transition
+                
+                if transition_length > 0 and len(result) > 0 and len(result[-1]) > 0:
+                    # Create smooth transition
+                    fade_in = np.linspace(0, 1, transition_length)
+                    fade_out = np.linspace(1, 0, transition_length)
+                    
+                    # Get the last part of previous wave
+                    prev_wave = result[-1]
+                    if len(prev_wave) >= transition_length:
+                        # Overlap and blend
+                        overlap_prev = prev_wave[-transition_length:] * fade_out
+                        overlap_curr = wave[:transition_length] * fade_in
+                        blended_overlap = overlap_prev + overlap_curr
+                        
+                        # Combine: previous (without overlap) + blended overlap + current (without overlap)
+                        result[-1] = np.concatenate([
+                            prev_wave[:-transition_length], 
+                            blended_overlap
+                        ])
+                        
+                        # Add the rest of current wave
+                        if len(wave) > transition_length:
+                            result.append(wave[transition_length:])
+                    else:
+                        # If previous wave is too short, just add current wave
+                        result.append(wave)
+                else:
+                    # No transition possible, just add the wave
+                    result.append(wave)
+        
+        # Concatenate all waves
+        if result:
+            return np.concatenate(result)
+        else:
+            return np.array([])
     
     def generate_speech(self, text: str, voice_id: str, speed: float = 1.0, 
                        pitch: float = 1.0, volume: float = 1.0) -> tuple:
-        """Generate advanced speech synthesis with voice characteristics"""
+        """Generate human-like speech synthesis with improved realism"""
         
-        # Get voice characteristics
-        voice_data = voices_db.get(voice_id, voices_db["default"])
+        # Get voice profile
+        voice_profile = self.voice_profiles.get(voice_id, self.voice_profiles["default"]).copy()
         
-        # Calculate duration based on text and speed
-        words = len(text.split())
-        base_duration = words * 0.6  # ~0.6 seconds per word
-        duration = base_duration / speed
+        # Apply pitch adjustment
+        voice_profile["base_f0"] *= pitch
+        voice_profile["f0_range"] *= pitch
         
-        # Generate time array
-        t = np.linspace(0, duration, int(self.sample_rate * duration))
+        # Convert text to phonemes
+        phonemes = self._text_to_phonemes(text)
         
-        # Voice-specific frequency characteristics
-        voice_frequencies = {
-            "default": {"base": 220, "harmonics": [1, 0.5, 0.3]},
-            "female_default": {"base": 350, "harmonics": [1, 0.7, 0.4, 0.2]},
-            "male_default": {"base": 180, "harmonics": [1, 0.6, 0.3]},
-            "female_young": {"base": 400, "harmonics": [1, 0.8, 0.5, 0.3]},
-            "male_deep": {"base": 120, "harmonics": [1, 0.4, 0.2]},
-            "female_british": {"base": 320, "harmonics": [1, 0.6, 0.4, 0.2]}
-        }
+        if not phonemes:
+            # Generate silence for empty text
+            return np.zeros(int(self.sample_rate * 0.5), dtype=np.int16), self.sample_rate
         
-        voice_params = voice_frequencies.get(voice_id, voice_frequencies["default"])
-        base_freq = voice_params["base"] * pitch
-        harmonics = voice_params["harmonics"]
+        # Generate audio for each phoneme
+        phoneme_waves = []
         
-        # Initialize audio signal
-        audio = np.zeros_like(t)
+        # Add slight randomness for natural speech rhythm
+        random.seed(hash(text) % 1000)  # Consistent randomness for same text
         
-        # Generate speech-like patterns
-        for i, char in enumerate(text.lower()):
-            if char.isalpha():
-                # Character-specific frequency variation
-                char_offset = (ord(char) - ord('a')) / 26.0  # 0 to 1
-                char_freq = base_freq * (1 + char_offset * 0.5)
+        for i, phoneme in enumerate(phonemes):
+            if phoneme == 'pause':
+                # Short pause for spaces
+                duration = (0.08 + random.uniform(-0.02, 0.03)) / speed
+                silence = np.zeros(int(self.sample_rate * duration))
+                phoneme_waves.append(silence)
                 
-                # Time window for this character
-                char_start = i * duration / len(text)
-                char_end = min((i + 1) * duration / len(text), duration)
+            elif phoneme == 'long_pause':
+                # Longer pause for punctuation
+                duration = (0.25 + random.uniform(-0.05, 0.08)) / speed
+                silence = np.zeros(int(self.sample_rate * duration))
+                phoneme_waves.append(silence)
                 
-                # Find indices for this time window
-                start_idx = int(char_start * self.sample_rate)
-                end_idx = int(char_end * self.sample_rate)
+            else:
+                # Generate speech sound for phoneme
+                base_duration = (0.10 + random.uniform(-0.02, 0.04)) / speed  # Natural variation
                 
-                if start_idx < len(t) and end_idx <= len(t):
-                    char_t = t[start_idx:end_idx]
+                # Vowels typically last longer than consonants
+                if phoneme in 'aeiou':
+                    base_duration *= 1.4
+                elif phoneme in 'mnrl':  # Sonorants
+                    base_duration *= 1.2
+                elif phoneme in 'szfvth':  # Fricatives
+                    base_duration *= 1.1
+                # Stops (p,t,k,b,d,g) keep base duration
+                
+                # Get phoneme frequencies
+                phoneme_data = self.phoneme_frequencies.get(phoneme, self.phoneme_frequencies['default'])
+                
+                # Apply voice-specific formant shifting
+                f1 = phoneme_data['f1'] * voice_profile['formant_shift']
+                f2 = phoneme_data['f2'] * voice_profile['formant_shift']
+                f3 = phoneme_data['f3'] * voice_profile['formant_shift']
+                
+                # Add natural F0 variation based on position in sentence
+                position_factor = i / max(len(phonemes) - 1, 1)  # 0 to 1
+                # Natural declination (pitch tends to fall toward end of sentence)
+                declination = 1.0 - 0.15 * position_factor
+                
+                f0 = voice_profile['base_f0'] * declination + random.uniform(
+                    -voice_profile['f0_range']/3, voice_profile['f0_range']/3
+                )
+                
+                # Ensure f0 stays positive
+                f0 = max(f0, 50)
+                
+                # Generate formant wave
+                wave = self._generate_formant_wave(base_duration, f1, f2, f3, f0, self.sample_rate)
+                
+                if len(wave) > 0:
+                    # Add voice characteristics
+                    t = np.linspace(0, base_duration, len(wave))
+                    wave = self._add_voice_characteristics(wave, voice_profile, t)
                     
-                    # Generate harmonics for more natural sound
-                    char_audio = np.zeros_like(char_t)
-                    for h_idx, h_amp in enumerate(harmonics):
-                        harmonic_freq = char_freq * (h_idx + 1)
-                        char_audio += h_amp * np.sin(2 * np.pi * harmonic_freq * char_t)
+                    # Apply natural envelope (attack, sustain, decay)
+                    envelope_length = len(wave)
                     
-                    # Apply envelope for smoother transitions
-                    envelope = np.exp(-3 * np.abs(char_t - (char_start + char_end) / 2) / (char_end - char_start))
-                    char_audio *= envelope
-                    
-                    audio[start_idx:end_idx] += char_audio
-            
-            elif char == ' ':
-                # Add brief pause for spaces
-                pause_start = i * duration / len(text)
-                pause_duration = 0.1 / speed
-                pause_idx = int(pause_start * self.sample_rate)
-                pause_end_idx = int((pause_start + pause_duration) * self.sample_rate)
+                    if envelope_length > 0:
+                        attack_length = min(envelope_length // 5, 300)  # Quick attack
+                        decay_length = min(envelope_length // 4, 500)   # Gentle decay
+                        
+                        envelope = np.ones(envelope_length)
+                        
+                        # Attack (fade in)
+                        if attack_length > 0:
+                            envelope[:attack_length] = np.linspace(0.1, 1, attack_length)
+                        
+                        # Decay (fade out)
+                        if decay_length > 0:
+                            envelope[-decay_length:] = np.linspace(1, 0.2, decay_length)
+                        
+                        wave *= envelope
                 
-                if pause_idx < len(audio) and pause_end_idx <= len(audio):
-                    audio[pause_idx:pause_end_idx] *= 0.1  # Reduce volume for pause
+                phoneme_waves.append(wave)
         
-        # Apply global effects
-        # Volume control
-        audio *= volume
+        # Apply coarticulation for smoother transitions
+        full_audio = self._apply_coarticulation(phoneme_waves)
         
-        # Add subtle vibrato for more natural sound
-        vibrato_freq = 4.5
-        vibrato_depth = 0.02
-        vibrato = 1 + vibrato_depth * np.sin(2 * np.pi * vibrato_freq * t)
-        audio *= vibrato
+        if len(full_audio) == 0:
+            return np.zeros(int(self.sample_rate * 0.5), dtype=np.int16), self.sample_rate
+        
+        # Apply volume
+        full_audio *= volume
+        
+        # Add very subtle background noise for realism
+        noise_level = 0.002
+        noise = np.random.normal(0, noise_level, len(full_audio))
+        full_audio += noise
+        
+        # Apply natural compression (makes it sound more like recorded speech)
+        full_audio = np.tanh(full_audio * 0.9) * 1.1
+        
+        # Apply subtle high-frequency rolloff (like natural vocal tract filtering)
+        # Simple lowpass effect
+        if len(full_audio) > 1:
+            for i in range(1, len(full_audio)):
+                full_audio[i] = 0.85 * full_audio[i] + 0.15 * full_audio[i-1]
         
         # Normalize and convert to int16
-        audio = np.clip(audio, -1, 1)
-        audio = (audio * 32767).astype(np.int16)
+        max_val = np.max(np.abs(full_audio))
+        if max_val > 0:
+            full_audio = full_audio / max_val * 0.8  # Leave some headroom
         
-        return audio, self.sample_rate
+        full_audio = np.clip(full_audio, -1, 1)
+        full_audio = (full_audio * 32767).astype(np.int16)
+        
+        return full_audio, self.sample_rate
 
 # Initialize TTS engine
 tts_engine = AdvancedTTS()
@@ -362,16 +681,18 @@ def save_audio_file(audio_data: np.ndarray, sample_rate: int, audio_id: str, for
 @app.get("/", tags=["Root"])
 async def root():
     return {
-        "message": "Chatterbox TTS API with JWT Authentication",
-        "version": "2.0.0",
+        "message": "Chatterbox TTS API with JWT Authentication & Human-like Speech",
+        "version": "2.1.0",
         "status": "running",
         "features": [
             "JWT Authentication",
-            "Voice Management", 
-            "Speech Synthesis",
+            "Human-like Voice Synthesis", 
+            "Voice Management",
+            "Speech Synthesis with Formants",
             "Audio Playback",
             "Custom Voice Creation"
         ],
+        "speech_engine": "Advanced Formant-Based TTS",
         "documentation": "/docs"
     }
 
@@ -380,7 +701,8 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "version": "2.0.0",
+        "version": "2.1.0",
+        "speech_engine": "Human-like Formant TTS",
         "voices_available": len(voices_db),
         "audio_files_stored": len([f for f in os.listdir(AUDIO_DIR) if f.endswith('.wav')]) if os.path.exists(AUDIO_DIR) else 0
     }
@@ -658,7 +980,7 @@ async def synthesize_speech(
     request: SynthesizeRequest,
     current_user: dict = Depends(get_current_user)
 ):
-    """Generate speech from text using specified voice with enhanced parameters"""
+    """Generate human-like speech from text using specified voice with enhanced parameters"""
     
     # Validate voice exists
     if request.voice_id not in voices_db:
@@ -686,7 +1008,7 @@ async def synthesize_speech(
         raise HTTPException(status_code=400, detail="Text too long. Maximum 5000 characters.")
     
     try:
-        # Generate speech using TTS engine
+        # Generate speech using enhanced TTS engine
         audio_data, sample_rate = tts_engine.generate_speech(
             text=request.text,
             voice_id=request.voice_id,
@@ -730,7 +1052,7 @@ async def synthesize_speech(
         return {
             "success": True,
             "audio_id": audio_id,
-            "message": f"Speech synthesized successfully using voice '{voice_data['name']}'",
+            "message": f"Human-like speech synthesized successfully using voice '{voice_data['name']}'",
             "synthesis_info": {
                 "text": request.text,
                 "voice_id": request.voice_id,
@@ -738,6 +1060,7 @@ async def synthesize_speech(
                 "voice_type": voice_data["type"],
                 "language": voice_data.get("language", "en-US"),
                 "gender": voice_data.get("gender", "neutral"),
+                "synthesis_method": "Formant-based with coarticulation",
                 "parameters": {
                     "speed": request.speed,
                     "pitch": request.pitch,
@@ -754,7 +1077,8 @@ async def synthesize_speech(
             "playback_urls": {
                 "download": f"/audio/{audio_id}",
                 "stream": f"/audio/{audio_id}/stream",
-                "info": f"/audio/{audio_id}/info"
+                "info": f"/audio/{audio_id}/info",
+                "waveform": f"/audio/{audio_id}/waveform"
             }
         }
         
@@ -873,7 +1197,8 @@ async def get_audio_waveform(audio_id: str, current_user: dict = Depends(get_cur
                 "waveform": waveform_normalized.tolist(),
                 "sample_rate": audio_info["sample_rate"],
                 "duration": audio_info["duration"],
-                "points": len(waveform_normalized)
+                "points": len(waveform_normalized),
+                "synthesis_method": "Human-like formant synthesis"
             }
     
     except Exception as e:
@@ -979,13 +1304,18 @@ async def get_profile(current_user: dict = Depends(get_current_user)):
             "account_age_days": (datetime.utcnow() - datetime.fromisoformat(current_user["created_at"].replace('Z', '+00:00'))).days
         },
         "available_features": [
+            "Human-like voice synthesis with formants",
             "Voice cloning from audio samples",
-            "Multiple built-in voices", 
-            "Speech synthesis with custom parameters",
+            "Multiple built-in voices with distinct characteristics", 
+            "Speech synthesis with natural coarticulation",
             "Audio file download and streaming",
             "Waveform visualization",
             "Voice and audio management"
-        ]
+        ],
+        "speech_technology": {
+            "engine": "Advanced Formant-Based TTS",
+            "features": ["Phoneme processing", "Formant synthesis", "Voice profiles", "Natural coarticulation"]
+        }
     }
 
 # API statistics (admin-like endpoint)
@@ -1009,6 +1339,11 @@ async def get_api_stats(current_user: dict = Depends(get_current_user)):
         "voice_genders": {
             gender: len([v for v in voices_db.values() if v.get("gender") == gender])
             for gender in set(v.get("gender", "neutral") for v in voices_db.values())
+        },
+        "speech_engine": {
+            "type": "Human-like Formant TTS",
+            "version": "2.1.0",
+            "features": ["Formant synthesis", "Phoneme mapping", "Voice characteristics", "Coarticulation"]
         }
     }
 
