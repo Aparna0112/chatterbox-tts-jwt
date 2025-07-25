@@ -1,10 +1,11 @@
 # ChatterboxTTS from Resemble AI GitHub Repository
-git+https://github.com/resemble-ai/chatterbox.git
+git+https://github.com/resemble-ai/chatterbox.git@main
+
 # Core web framework
 fastapi==0.100.0
 uvicorn[standard]==0.20.0
 
-# JWT Authentication - CRITICAL FIX
+# JWT Authentication
 PyJWT==2.8.0
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
@@ -16,10 +17,6 @@ soundfile==0.12.1
 librosa==0.10.1
 numpy==1.24.0
 scipy==1.10.0
-
-# Torch CPU (will be installed separately)
-# torch
-# torchaudio
 
 # Transformers and ML dependencies  
 transformers==4.30.0
