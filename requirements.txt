@@ -13,18 +13,21 @@ librosa>=0.10.1
 numpy>=1.24.3
 
 # PyTorch (CPU version for Render)
-torch>=2.0.0+cpu
-torchaudio>=2.0.0+cpu
---find-links https://download.pytorch.org/whl/torch_stable.html
+torch>=2.0.0
+torchaudio>=2.0.0
+--index-url https://download.pytorch.org/whl/cpu
 
-# Chatterbox TTS
-chatterbox-tts>=1.0.0
+# Chatterbox TTS - Install from GitHub source (recommended method)
+git+https://github.com/resemble-ai/chatterbox.git
 
-# Additional dependencies that might be needed
-transformers>=4.30.0
-huggingface_hub>=0.16.4
-safetensors>=0.3.1
-accelerate>=0.20.3
+# Dependencies that should be automatically installed with Chatterbox
+transformers
+huggingface_hub
+safetensors
+accelerate
+
+# Additional audio dependencies
+scipy>=1.10.0
 
 # Utilities
 python-dotenv>=1.0.0
