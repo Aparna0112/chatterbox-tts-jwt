@@ -1,37 +1,11 @@
-# ChatterboxTTS from PyPI (official package)
+# Core dependencies - let pip resolve versions
 chatterbox-tts
-
-# Core web framework
-fastapi==0.100.0
-uvicorn[standard]==0.20.0
-
-# JWT Authentication
-PyJWT==2.8.0
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-python-multipart==0.0.6
-cryptography==41.0.0
-
-# Audio processing
-soundfile==0.12.1
-librosa==0.10.1
-numpy==1.24.0
-scipy==1.10.0
-
-# PyTorch (required for chatterbox-tts)
-torch
-torchaudio
-
-# Transformers and ML dependencies  
-transformers==4.30.0
-huggingface_hub==0.16.4
-safetensors==0.3.1
-accelerate==0.20.3
-
-# Utilities
-python-dotenv==1.0.0
-requests==2.31.0
-aiofiles==22.1.0
-
-# Pydantic (FastAPI dependency)
-pydantic==1.10.12
+fastapi
+uvicorn[standard]
+PyJWT
+python-jose[cryptography]
+passlib[bcrypt]
+python-multipart
+python-dotenv
+requests
+aiofiles
