@@ -13,7 +13,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-import jwt
+import jwt  # This should be PyJWT
 from passlib.context import CryptContext
 import numpy as np
 import soundfile as sf
