@@ -1,81 +1,32 @@
 import os
 import uuid
 import shutil
-import tempfile
-from datetime import datetime, timedelta
+import gc
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Optional
 import logging
 
 import uvicorn
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException, status, Form
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from fastapi import FastAPI, UploadFile, File, HTTPException, Form
 from fastapi.responses import FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
-
-# JWT import - handle the import issue properly
-JWT_AVAILABLE = False
-jwt = None
-
-try:
-    import jwt as pyjwt
-    jwt = pyjwt
-    JWT_AVAILABLE = True
-    print("✅ PyJWT imported successfully")
-except ImportError:
-    try:
-        from jose import jwt
-        JWT_AVAILABLE = True
-        print("✅ JWT imported from python-jose")
-    except ImportError:
-        try:
-            # Try importing jwt from PyJWT package
-            from jwt import PyJWT
-            jwt = PyJWT()
-            JWT_AVAILABLE = True
-            print("✅ JWT imported from PyJWT class")
-        except ImportError:
-            print("❌ No JWT library available - authentication will not work")
-            # Create a dummy jwt object to prevent crashes
-            class DummyJWT:
-                def encode(self, *args, **kwargs):
-                    return "dummy_token"
-                def decode(self, *args, **kwargs):
-                    return {"sub": "dummy_user"}
-                class PyJWTError(Exception):
-                    pass
-            jwt = DummyJWT()
-            JWT_AVAILABLE = False
-
-from passlib.context import CryptContext
 import numpy as np
 import soundfile as sf
 import torch
-
-# Try to import Chatterbox TTS
-try:
-    from chatterbox.tts import ChatterboxTTS
-    CHATTERBOX_AVAILABLE = True
-    print("✅ Chatterbox TTS imported successfully")
-except ImportError as e:
-    CHATTERBOX_AVAILABLE = False
-    print(f"❌ Chatterbox TTS not available: {e}")
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 # Environment variables
-SECRET_KEY = os.getenv("SECRET_KEY", "your-super-secret-jwt-key-change-this-in-production")
-ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "30"))
-REFRESH_TOKEN_EXPIRE_DAYS = int(os.getenv("REFRESH_TOKEN_EXPIRE_DAYS", "7"))
 PORT = int(os.getenv("PORT", "8000"))
 
 # Initialize FastAPI
 app = FastAPI(
-    title="Chatterbox TTS API with JWT",
-    description="Production-ready Text-to-Speech API with real Chatterbox TTS",
+    title="Chatterbox TTS API - Memory Optimized",
+    description="Text-to-Speech API with lazy-loaded Chatterbox TTS",
     version="1.0.0"
 )
 
@@ -88,10 +39,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Security
-security = HTTPBearer()
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 # Storage directories
 VOICES_DIR = Path("voices")
 AUDIO_DIR = Path("audio")
@@ -99,164 +46,125 @@ VOICES_DIR.mkdir(exist_ok=True)
 AUDIO_DIR.mkdir(exist_ok=True)
 
 # In-memory storage
-users_db: Dict[str, dict] = {}
-voices_db: Dict[str, dict] = {}
-audio_db: Dict[str, dict] = {}
+voices_db = {}
+audio_db = {}
 
-# TTS Engine
-class ChatterboxTTSEngine:
-    def __init__(self):
-        self.model = None
-        self.device = "cpu"  # Render uses CPU
-        if CHATTERBOX_AVAILABLE:
-            self.initialize_model()
-    
-    def initialize_model(self):
-        """Initialize Chatterbox TTS model"""
-        try:
-            logger.info("Initializing Chatterbox TTS model...")
-            
-            # Use CPU for Render
-            self.device = "cpu"
-            logger.info(f"Using device: {self.device}")
-            
-            # Initialize the model
-            self.model = ChatterboxTTS.from_pretrained(device=self.device)
-            logger.info("✅ Chatterbox TTS model loaded successfully")
-            
-        except Exception as e:
-            logger.error(f"Failed to initialize Chatterbox TTS: {e}")
-            self.model = None
-    
-    def generate_speech(
-        self, 
-        text: str, 
-        voice_id: str = "default",
-        exaggeration: float = 0.5,
-        cfg_weight: float = 0.5,
-        temperature: float = 0.8,
-        audio_prompt_path: Optional[str] = None
-    ) -> tuple[np.ndarray, int]:
-        """Generate speech using Chatterbox TTS"""
-        if not self.model:
-            raise Exception("Chatterbox TTS model not available")
-            
-        try:
-            # Clean text
-            text = text.strip()
-            if not text:
-                raise ValueError("Text cannot be empty")
-            
-            # Limit text length
-            if len(text) > 500:
-                text = text[:500]
-                logger.warning("Text truncated to 500 characters")
-            
-            logger.info(f"Generating speech: '{text[:50]}...'")
-            
-            # Generate speech
-            if audio_prompt_path and Path(audio_prompt_path).exists():
-                wav = self.model.generate(
-                    text, 
-                    audio_prompt_path=audio_prompt_path,
-                    exaggeration=exaggeration,
-                    cfg_weight=cfg_weight,
-                    temperature=temperature
-                )
-            else:
-                wav = self.model.generate(
-                    text,
-                    exaggeration=exaggeration,
-                    cfg_weight=cfg_weight,
-                    temperature=temperature
-                )
-            
-            # Convert to numpy
-            if torch.is_tensor(wav):
-                wav = wav.cpu().numpy()
-            
-            if wav.ndim > 1:
-                wav = wav.squeeze()
-            
-            # Get sample rate
-            sample_rate = getattr(self.model, 'sr', 24000)
-            
-            logger.info(f"✅ Speech generated: {len(wav)} samples at {sample_rate}Hz")
-            return wav, sample_rate
-            
-        except Exception as e:
-            logger.error(f"Speech generation failed: {e}")
-            raise Exception(f"TTS generation failed: {str(e)}")
+# Global TTS model - loaded only when needed
+_tts_model = None
+_model_loading = False
 
-# Initialize TTS
-tts_engine = ChatterboxTTSEngine()
+def get_tts_model():
+    """Lazy load the TTS model only when needed"""
+    global _tts_model, _model_loading
+    
+    if _tts_model is not None:
+        return _tts_model
+    
+    if _model_loading:
+        raise Exception("Model is currently loading, please wait...")
+    
+    try:
+        _model_loading = True
+        logger.info("🚀 Loading Chatterbox TTS model on-demand...")
+        
+        # Import only when needed
+        from chatterbox.tts import ChatterboxTTS
+        
+        # Force garbage collection before loading
+        gc.collect()
+        
+        # Use CPU and optimize memory
+        device = "cpu"
+        logger.info(f"Loading model on device: {device}")
+        
+        # Load model
+        _tts_model = ChatterboxTTS.from_pretrained(device=device)
+        
+        # Force garbage collection after loading
+        gc.collect()
+        
+        logger.info("✅ Chatterbox TTS model loaded successfully")
+        return _tts_model
+        
+    except Exception as e:
+        logger.error(f"Failed to load Chatterbox TTS: {e}")
+        raise Exception(f"TTS model loading failed: {str(e)}")
+    finally:
+        _model_loading = False
+
+def generate_speech(
+    text: str, 
+    exaggeration: float = 0.5,
+    cfg_weight: float = 0.5,
+    temperature: float = 0.8,
+    audio_prompt_path: Optional[str] = None
+) -> tuple[np.ndarray, int]:
+    """Generate speech using Chatterbox TTS with memory management"""
+    
+    # Get model (loads on first use)
+    model = get_tts_model()
+    
+    try:
+        # Clean text
+        text = text.strip()
+        if not text:
+            raise ValueError("Text cannot be empty")
+        
+        # Limit text length for memory efficiency
+        if len(text) > 300:
+            text = text[:300]
+            logger.warning("Text truncated to 300 characters for memory efficiency")
+        
+        logger.info(f"Generating speech: '{text[:30]}...'")
+        
+        # Force garbage collection before generation
+        gc.collect()
+        
+        # Generate speech
+        if audio_prompt_path and Path(audio_prompt_path).exists():
+            wav = model.generate(
+                text, 
+                audio_prompt_path=audio_prompt_path,
+                exaggeration=exaggeration,
+                cfg_weight=cfg_weight,
+                temperature=temperature
+            )
+        else:
+            wav = model.generate(
+                text,
+                exaggeration=exaggeration,
+                cfg_weight=cfg_weight,
+                temperature=temperature
+            )
+        
+        # Convert to numpy and clean up
+        if torch.is_tensor(wav):
+            wav = wav.cpu().numpy()
+        
+        if wav.ndim > 1:
+            wav = wav.squeeze()
+        
+        # Get sample rate
+        sample_rate = getattr(model, 'sr', 24000)
+        
+        # Force garbage collection after generation
+        gc.collect()
+        
+        logger.info(f"✅ Speech generated: {len(wav)} samples at {sample_rate}Hz")
+        return wav, sample_rate
+        
+    except Exception as e:
+        # Clean up on error
+        gc.collect()
+        logger.error(f"Speech generation failed: {e}")
+        raise Exception(f"TTS generation failed: {str(e)}")
 
 # Pydantic models
-class UserCreate(BaseModel):
-    username: str = Field(..., min_length=3, max_length=50)
-    email: str = Field(...)
-    password: str = Field(..., min_length=6)
-    full_name: Optional[str] = None
-
-class UserLogin(BaseModel):
-    username: str
-    password: str
-
-class Token(BaseModel):
-    access_token: str
-    refresh_token: str
-    token_type: str = "bearer"
-
 class SynthesizeRequest(BaseModel):
-    text: str = Field(..., max_length=500)
-    voice_id: str = Field(default="default")
+    text: str = Field(..., max_length=300)  # Reduced for memory efficiency
     exaggeration: float = Field(default=0.5, ge=0.0, le=2.0)
     cfg_weight: float = Field(default=0.5, ge=0.0, le=1.0)
     temperature: float = Field(default=0.8, ge=0.05, le=5.0)
-
-# Utility functions
-def create_access_token(data: dict) -> str:
-    if not JWT_AVAILABLE:
-        return "dummy_token"
-    
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
-
-def create_refresh_token(data: dict) -> str:
-    if not JWT_AVAILABLE:
-        return "dummy_refresh_token"
-        
-    to_encode = data.copy()
-    expire = datetime.utcnow() + timedelta(days=REFRESH_TOKEN_EXPIRE_DAYS)
-    to_encode.update({"exp": expire})
-    return jwt.encode(to_encode, SECRET_KEY, algorithm="HS256")
-
-def verify_token(credentials: HTTPAuthorizationCredentials = Depends(security)) -> str:
-    if not JWT_AVAILABLE:
-        # If JWT is not available, use a simple token verification
-        if credentials.credentials == "dummy_token":
-            return "dummy_user"
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="JWT not available - authentication disabled"
-        )
-    
-    try:
-        payload = jwt.decode(credentials.credentials, SECRET_KEY, algorithms=["HS256"])
-        username: str = payload.get("sub")
-        if username is None:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="Invalid token"
-            )
-        return username
-    except Exception:  # Catch all JWT errors
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid token"
-        )
 
 def get_audio_duration(file_path: str) -> float:
     try:
@@ -269,13 +177,11 @@ def get_audio_duration(file_path: str) -> float:
 @app.get("/")
 async def root():
     return {
-        "message": "Chatterbox TTS API with JWT Authentication",
+        "message": "Chatterbox TTS API - Memory Optimized for Render Free Tier",
         "version": "1.0.0",
         "status": "running",
-        "tts_available": tts_engine.model is not None,
-        "tts_engine": "Chatterbox TTS" if CHATTERBOX_AVAILABLE else "Not Available",
-        "jwt_available": JWT_AVAILABLE,
-        "jwt_available": JWT_AVAILABLE
+        "model_status": "loaded" if _tts_model is not None else "will load on first use",
+        "note": "Model loads on first synthesis request to save memory"
     }
 
 @app.get("/health")
@@ -283,176 +189,39 @@ async def health_check():
     return {
         "status": "healthy",
         "timestamp": datetime.utcnow().isoformat(),
-        "tts_model": "available" if tts_engine.model else "unavailable",
-        "tts_engine": "Chatterbox TTS" if CHATTERBOX_AVAILABLE else "Not Available"
+        "model_loaded": _tts_model is not None,
+        "model_loading": _model_loading,
+        "memory_note": "Model loads on-demand to optimize memory usage"
     }
 
-@app.post("/auth/register")
-async def register(user: UserCreate):
-    if user.username in users_db:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already registered"
-        )
-    
-    hashed_password = pwd_context.hash(user.password)
-    users_db[user.username] = {
-        "username": user.username,
-        "email": user.email,
-        "full_name": user.full_name,
-        "hashed_password": hashed_password,
-        "created_at": datetime.utcnow().isoformat()
-    }
-    
-    return {"message": "User registered successfully", "username": user.username}
-
-@app.post("/auth/login", response_model=Token)
-async def login(user: UserLogin):
-    if user.username not in users_db:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
-        )
-    
-    stored_user = users_db[user.username]
-    if not pwd_context.verify(user.password, stored_user["hashed_password"]):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid credentials"
-        )
-    
-    access_token = create_access_token(data={"sub": user.username})
-    refresh_token = create_refresh_token(data={"sub": user.username})
-    
-    return {
-        "access_token": access_token,
-        "refresh_token": refresh_token,
-        "token_type": "bearer"
-    }
-
-@app.get("/profile")
-async def get_profile(current_user: str = Depends(verify_token)):
-    if current_user not in users_db:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    user_data = users_db[current_user].copy()
-    user_data.pop("hashed_password", None)
-    return user_data
-
-@app.get("/voices")
-async def list_voices(current_user: str = Depends(verify_token)):
-    user_voices = [
-        voice for voice in voices_db.values() 
-        if voice.get("owner") == current_user
-    ]
-    
-    default_voice = {
-        "voice_id": "default",
-        "name": "Default Chatterbox Voice",
-        "description": "Built-in Chatterbox TTS voice",
-        "type": "builtin",
-        "created_at": "2024-01-01T00:00:00Z"
-    }
-    
-    all_voices = [default_voice] + user_voices
-    
-    return {
-        "voices": all_voices,
-        "total": len(all_voices),
-        "builtin": 1,
-        "custom": len(user_voices)
-    }
-
-@app.post("/voices")
-async def create_voice(
-    voice_name: str = Form(...),
-    voice_description: str = Form(...),
-    audio_file: UploadFile = File(...),
-    current_user: str = Depends(verify_token)
-):
-    if not audio_file.content_type.startswith('audio/'):
-        raise HTTPException(status_code=400, detail="File must be an audio file")
-    
-    voice_id = f"voice_{int(datetime.utcnow().timestamp())}_{uuid.uuid4().hex[:8]}"
-    
-    voice_dir = VOICES_DIR / voice_id
-    voice_dir.mkdir(exist_ok=True)
-    
-    audio_path = voice_dir / f"reference.wav"
-    
-    with open(audio_path, "wb") as buffer:
-        shutil.copyfileobj(audio_file.file, buffer)
-    
-    duration = get_audio_duration(str(audio_path))
-    
-    voice_data = {
-        "voice_id": voice_id,
-        "name": voice_name,
-        "description": voice_description,
-        "type": "custom",
-        "owner": current_user,
-        "audio_path": str(audio_path),
-        "created_at": datetime.utcnow().isoformat(),
-        "audio_duration": duration
-    }
-    
-    voices_db[voice_id] = voice_data
-    
-    return {
-        "success": True,
-        "voice_id": voice_id,
-        "message": f"Voice '{voice_name}' created successfully",
-        "voice_info": voice_data
-    }
-
-@app.delete("/voices/{voice_id}")
-async def delete_voice(voice_id: str, current_user: str = Depends(verify_token)):
-    if voice_id == "default":
-        raise HTTPException(status_code=400, detail="Cannot delete default voice")
-    
-    if voice_id not in voices_db:
-        raise HTTPException(status_code=404, detail="Voice not found")
-    
-    voice = voices_db[voice_id]
-    if voice.get("owner") != current_user:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
-    voice_dir = VOICES_DIR / voice_id
-    if voice_dir.exists():
-        shutil.rmtree(voice_dir)
-    
-    del voices_db[voice_id]
-    return {"message": f"Voice {voice_id} deleted successfully"}
+@app.post("/load-model")
+async def load_model():
+    """Manually load the TTS model"""
+    try:
+        model = get_tts_model()
+        return {
+            "success": True,
+            "message": "Model loaded successfully",
+            "model_loaded": True
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to load model: {str(e)}",
+            "model_loaded": False
+        }
 
 @app.post("/synthesize")
-async def synthesize_speech(
-    request: SynthesizeRequest,
-    current_user: str = Depends(verify_token)
-):
-    if not tts_engine.model:
-        raise HTTPException(status_code=500, detail="TTS model not available")
-    
+async def synthesize_speech(request: SynthesizeRequest):
     try:
-        # Get voice path if custom voice
-        audio_prompt_path = None
-        if request.voice_id != "default":
-            if request.voice_id not in voices_db:
-                raise HTTPException(status_code=404, detail="Voice not found")
-            
-            voice = voices_db[request.voice_id]
-            if voice.get("owner") != current_user:
-                raise HTTPException(status_code=403, detail="Not authorized")
-            
-            audio_prompt_path = voice["audio_path"]
+        logger.info(f"Synthesis request: {request.text[:50]}...")
         
-        # Generate speech
-        wav, sample_rate = tts_engine.generate_speech(
+        # Generate speech (model loads automatically if needed)
+        wav, sample_rate = generate_speech(
             text=request.text,
-            voice_id=request.voice_id,
             exaggeration=request.exaggeration,
             cfg_weight=request.cfg_weight,
-            temperature=request.temperature,
-            audio_prompt_path=audio_prompt_path
+            temperature=request.temperature
         )
         
         # Save audio file
@@ -465,8 +234,6 @@ async def synthesize_speech(
         duration = len(wav) / sample_rate
         audio_data = {
             "audio_id": audio_id,
-            "owner": current_user,
-            "voice_id": request.voice_id,
             "text": request.text,
             "file_path": str(audio_path),
             "sample_rate": sample_rate,
@@ -476,28 +243,33 @@ async def synthesize_speech(
         
         audio_db[audio_id] = audio_data
         
+        # Clean up memory
+        del wav
+        gc.collect()
+        
         return {
             "success": True,
             "audio_id": audio_id,
-            "message": f"Speech synthesized using {request.voice_id}",
+            "message": "Speech synthesized successfully",
             "sample_rate": sample_rate,
-            "duration": duration
+            "duration": duration,
+            "download_url": f"/audio/{audio_id}"
         }
         
     except Exception as e:
         logger.error(f"Synthesis error: {e}")
+        # Clean up on error
+        gc.collect()
         raise HTTPException(status_code=500, detail=f"Speech synthesis failed: {str(e)}")
 
 @app.get("/audio/{audio_id}")
-async def download_audio(audio_id: str, current_user: str = Depends(verify_token)):
+async def download_audio(audio_id: str):
     if audio_id not in audio_db:
         raise HTTPException(status_code=404, detail="Audio not found")
     
     audio = audio_db[audio_id]
-    if audio.get("owner") != current_user:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
     file_path = audio["file_path"]
+    
     if not Path(file_path).exists():
         raise HTTPException(status_code=404, detail="Audio file not found")
     
@@ -508,22 +280,46 @@ async def download_audio(audio_id: str, current_user: str = Depends(verify_token
     )
 
 @app.get("/audio/{audio_id}/info")
-async def get_audio_info(audio_id: str, current_user: str = Depends(verify_token)):
+async def get_audio_info(audio_id: str):
     if audio_id not in audio_db:
         raise HTTPException(status_code=404, detail="Audio not found")
     
     audio = audio_db[audio_id]
-    if audio.get("owner") != current_user:
-        raise HTTPException(status_code=403, detail="Not authorized")
-    
     audio_info = audio.copy()
     audio_info.pop("file_path", None)
     return audio_info
+
+@app.delete("/clear-cache")
+async def clear_cache():
+    """Clear audio cache to free memory"""
+    try:
+        # Clear audio files
+        for audio_id, audio_data in list(audio_db.items()):
+            file_path = Path(audio_data["file_path"])
+            if file_path.exists():
+                file_path.unlink()
+        
+        # Clear database
+        audio_db.clear()
+        
+        # Force garbage collection
+        gc.collect()
+        
+        return {
+            "success": True,
+            "message": "Cache cleared successfully"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "message": f"Failed to clear cache: {str(e)}"
+        }
 
 if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host="0.0.0.0",
         port=PORT,
-        reload=False
+        reload=False,
+        workers=1  # Use only 1 worker to minimize memory usage
     )
