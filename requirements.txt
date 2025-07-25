@@ -1,5 +1,5 @@
-# ChatterboxTTS from Resemble AI GitHub Repository
-git+https://github.com/resemble-ai/chatterbox.git@main
+# ChatterboxTTS from PyPI (official package)
+chatterbox-tts
 
 # Core web framework
 fastapi==0.100.0
@@ -17,6 +17,10 @@ soundfile==0.12.1
 librosa==0.10.1
 numpy==1.24.0
 scipy==1.10.0
+
+# PyTorch (required for chatterbox-tts)
+torch
+torchaudio
 
 # Transformers and ML dependencies  
 transformers==4.30.0
